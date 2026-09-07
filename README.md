@@ -1,8 +1,10 @@
 # Excel Word Aktarıcı
 
-Excel dosyasındaki yedi tabloyu bulur ve karşılık gelen Word tablolarına aktarır.
-Aktarım başlamadan önce Excel ve Word tablo/sütun eşleştirmelerini gösterir; bütün
-seçimler kullanıcı tarafından değiştirilebilir.
+`2026 - Eylül` sayfasındaki PHF, HPU, Scrap, Forklift ve Ecart INV sütun
+gruplarını karşılık gelen Word tablolarına aktarır. Electric ve Gas tablolarına
+dokunmaz. Aktarım başlamadan önce Excel ve Word tablo/sütun eşleştirmelerini ve
+dosyalardan okunan başlık adlarını gösterir; bütün seçimler kullanıcı tarafından
+değiştirilebilir.
 
 ## Windows kullanımı
 

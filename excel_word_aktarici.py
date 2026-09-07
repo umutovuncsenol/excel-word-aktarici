@@ -517,11 +517,19 @@ TABLE_SPECS = (
     TableSpec("PHF", ("Date", "PHF (€)", "Volume", "PHF VT"), True),
     TableSpec("HPU", ("Date", "HPU", "Volume"), True),
     TableSpec("Scrap", ("Date", "Scrap (€)", "Volume", "Scrap VT"), True),
-    TableSpec("Electric Per Vehicle", ("Electric Per Vehicle (€)", "EMB", "TOL", "PEI", "MON", "CHA")),
-    TableSpec("Total Gas Per Vehicle", ("Total Gas Per Vehicle (€)", "EMB", "TOL", "PEI", "MON", "CHA", "Total")),
     TableSpec("Forklift", ("Date", "Forklift Quantitiy", "Volume", "Forklift Q / Volume"), True),
     TableSpec("Ecart INV", ("Date", "Ecart INV", "Volume", "Ecart INV / Volume"), True),
 )
+
+# 2026 - Eylül sayfasındaki sabit sütun grupları ve şablondaki varsayılan
+# Word tablo numaraları. Kullanıcı bunların tümünü onay ekranında değiştirebilir.
+POSITION_DEFAULTS = {
+    "PHF": ((1, 2, 3, 4), 2),                 # A:B:C:D
+    "HPU": ((25, 26, 27), 3),                # Y:Z:AA
+    "Scrap": ((125, 126, 127, 128), 4),      # DU:DV:DW:DX
+    "Forklift": ((203, 204, 205, 206), 7),   # GU:GV:GW:GX
+    "Ecart INV": ((220, 221, 222, 223), 8),  # HL:HM:HN:HO
+}
 
 
 @dataclass
@@ -534,6 +542,8 @@ class TableMapping:
     word_header_row: int
     word_columns: dict[str, int]
     detected: bool = True
+    excel_labels: dict[str, str] = field(default_factory=dict)
+    word_labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -587,36 +597,42 @@ def detect_mappings(excel_path: Path, word_path: Path) -> tuple[list[TableMappin
     mappings: list[TableMapping] = []
     try:
         sheet_names = workbook.sheetnames
-        for spec_index, spec in enumerate(TABLE_SPECS):
-            excel_candidates = []
-            for sheet in workbook.worksheets:
-                for row_number in range(1, min(sheet.max_row, MAX_HEADER_SCAN_ROWS) + 1):
-                    values = [sheet.cell(row_number, col).value for col in range(1, min(sheet.max_column, 200) + 1)]
-                    columns = _map_spec_headers(values, spec)
-                    if columns:
-                        score = _excel_candidate_score(sheet, row_number, columns, spec, workbook.epoch)
-                        excel_candidates.append((score, sheet.title, row_number, columns))
-            excel_candidates.sort(key=lambda item: item[0], reverse=True)
-
+        sheet_name = next(
+            (name for name in sheet_names if normalize_header(name) == normalize_header("2026 - Eylül")),
+            sheet_names[0],
+        )
+        sheet = workbook[sheet_name]
+        for spec in TABLE_SPECS:
+            fixed_columns, default_word_table = POSITION_DEFAULTS[spec.name]
+            excel_columns = dict(zip(spec.headers, fixed_columns))
+            excel_labels = {
+                header: str(sheet.cell(1, column).value or "")
+                for header, column in excel_columns.items()
+            }
             word_candidates = []
             for table_number, table in enumerate(document.tables, 1):
                 for row_number, row in enumerate(table.rows[:MAX_WORD_HEADER_SCAN_ROWS], 1):
                     columns = _map_spec_headers([cell.text for cell in row.cells], spec)
                     if columns:
                         word_candidates.append((table_number, row_number, columns))
-
-            detected = bool(excel_candidates and word_candidates)
-            if excel_candidates:
-                _, sheet_name, excel_row, excel_columns = excel_candidates[0]
-            else:
-                sheet_name, excel_row = sheet_names[0], 1
-                excel_columns = {header: i + 1 for i, header in enumerate(spec.headers)}
             if word_candidates:
                 word_table, word_row, word_columns = word_candidates[0]
             else:
-                word_table, word_row = min(spec_index + 1, max(len(document.tables), 1)), 1
+                word_table, word_row = default_word_table, 1
                 word_columns = {header: i + 1 for i, header in enumerate(spec.headers)}
-            mappings.append(TableMapping(spec, sheet_name, excel_row, excel_columns, word_table, word_row, word_columns, detected))
+            word_labels = {}
+            if 1 <= word_table <= len(document.tables):
+                header_cells = document.tables[word_table - 1].rows[word_row - 1].cells
+                word_labels = {
+                    header: header_cells[column - 1].text
+                    for header, column in word_columns.items()
+                    if column <= len(header_cells)
+                }
+            detected = all(excel_labels.values()) and bool(word_candidates)
+            mappings.append(TableMapping(
+                spec, sheet_name, 1, excel_columns, word_table, word_row,
+                word_columns, detected, excel_labels, word_labels
+            ))
         return mappings, sheet_names
     finally:
         workbook.close()
@@ -628,7 +644,7 @@ class MappingDialog(tk.Toplevel):
     def __init__(self, master: tk.Widget, mappings: list[TableMapping], sheet_names: list[str]):
         super().__init__(master)
         self.title("Tablo ve sütun eşleştirmelerini kontrol edin")
-        self.geometry("860x580")
+        self.geometry("1080x600")
         self.transient(master)
         self.grab_set()
         self.result: list[TableMapping] | None = None
@@ -656,17 +672,23 @@ class MappingDialog(tk.Toplevel):
             ttk.Entry(frame, textvariable=word_table_var, width=8).grid(row=2, column=1, sticky="w", pady=6)
             ttk.Label(frame, text="Word başlık satırı").grid(row=2, column=2, sticky="e", padx=(20, 5), pady=6)
             ttk.Entry(frame, textvariable=word_row_var, width=8).grid(row=2, column=3, sticky="w", pady=6)
-            ttk.Label(frame, text="Alan").grid(row=3, column=0, sticky="w", pady=(10, 3))
+            ttk.Label(frame, text="Hedef alan").grid(row=3, column=0, sticky="w", pady=(10, 3))
             ttk.Label(frame, text="Excel sütun no").grid(row=3, column=1, sticky="w", pady=(10, 3))
-            ttk.Label(frame, text="Word sütun no").grid(row=3, column=2, sticky="w", pady=(10, 3))
+            ttk.Label(frame, text="Excel'den okunan başlık").grid(row=3, column=2, sticky="w", pady=(10, 3))
+            ttk.Label(frame, text="Word sütun no").grid(row=3, column=3, sticky="w", pady=(10, 3))
+            ttk.Label(frame, text="Word'den okunan başlık").grid(row=3, column=4, sticky="w", pady=(10, 3))
             column_vars = {}
             for i, header in enumerate(mapping.spec.headers, 4):
                 ev = tk.StringVar(value=str(mapping.excel_columns[header]))
                 wv = tk.StringVar(value=str(mapping.word_columns[header]))
+                el = tk.StringVar(value=mapping.excel_labels.get(header, ""))
+                wl = tk.StringVar(value=mapping.word_labels.get(header, ""))
                 ttk.Label(frame, text=header).grid(row=i, column=0, sticky="w", pady=2)
                 ttk.Entry(frame, textvariable=ev, width=10).grid(row=i, column=1, sticky="w", pady=2)
-                ttk.Entry(frame, textvariable=wv, width=10).grid(row=i, column=2, sticky="w", pady=2)
-                column_vars[header] = (ev, wv)
+                ttk.Entry(frame, textvariable=el, width=24).grid(row=i, column=2, sticky="w", pady=2)
+                ttk.Entry(frame, textvariable=wv, width=10).grid(row=i, column=3, sticky="w", pady=2)
+                ttk.Entry(frame, textvariable=wl, width=24).grid(row=i, column=4, sticky="w", pady=2)
+                column_vars[header] = (ev, wv, el, wl)
             self._vars.append((mapping, sheet_var, excel_row_var, word_table_var, word_row_var, column_vars))
 
         buttons = ttk.Frame(self)
@@ -681,10 +703,16 @@ class MappingDialog(tk.Toplevel):
             for mapping, sheet, erow, wtable, wrow, column_vars in self._vars:
                 excel_columns = {h: int(v[0].get()) for h, v in column_vars.items()}
                 word_columns = {h: int(v[1].get()) for h, v in column_vars.items()}
+                excel_labels = {h: v[2].get().strip() for h, v in column_vars.items()}
+                word_labels = {h: v[3].get().strip() for h, v in column_vars.items()}
                 values = [int(erow.get()), int(wtable.get()), int(wrow.get()), *excel_columns.values(), *word_columns.values()]
                 if any(value < 1 for value in values):
                     raise ValueError
-                result.append(TableMapping(mapping.spec, sheet.get(), int(erow.get()), excel_columns, int(wtable.get()), int(wrow.get()), word_columns, mapping.detected))
+                result.append(TableMapping(
+                    mapping.spec, sheet.get(), int(erow.get()), excel_columns,
+                    int(wtable.get()), int(wrow.get()), word_columns,
+                    mapping.detected, excel_labels, word_labels
+                ))
         except ValueError:
             messagebox.showerror("Geçersiz eşleştirme", "Satır, tablo ve sütun numaraları 1 veya daha büyük tam sayı olmalıdır.", parent=self)
             return
